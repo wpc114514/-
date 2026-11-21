@@ -1,0 +1,17 @@
+# 术语表：每行一条「英文<TAB>中文」，翻译时自动保护这些术语，保证译法准确且全文一致。
+# 以 # 开头为注释；可随意增删改，保存后立即生效。
+# 分隔用 Tab（英文和中文之间按一下 Tab 键）。
+
+transformer	Transformer 模型
+attention	注意力
+attention mechanism	注意力机制
+embedding	词嵌入
+neural network	神经网络
+machine learning	机器学习
+deep learning	深度学习
+gradient descent	梯度下降
+overfitting	过拟合
+natural language processing	自然语言处理
+large language model	大语言模型
+fine-tuning	微调
+inference	推理

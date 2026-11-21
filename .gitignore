@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 打包产物
+build/
+dist/
+*.spec
+
+# 本地配置与日志（config.json 含 API 密钥，严禁提交）
+config.json
+error.log
+
+# 系统文件
+.DS_Store
+Thumbs.db

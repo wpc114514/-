@@ -1,0 +1,2 @@
+# 本应用不依赖任何第三方库（仅 Python 标准库 + tkinter）。
+# 使用 Python 官方安装包默认安装即可，无需 pip install。
