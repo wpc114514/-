@@ -123,8 +123,10 @@ def _top_round_rect(canvas, x1, y1, x2, y2, r, **kw):
 
 class TranslatePopup:
     PAD = 16
-    MIN_W = 360
-    MAX_W = 760
+    MIN_W = 320
+    MAX_W = 900
+    MIN_H = 160
+    EDGE = 6          # 边缘拖拽感应宽度（像素）
 
     def __init__(self, root, timeout=0, on_copy=None):
         self.root = root
@@ -141,9 +143,11 @@ class TranslatePopup:
         self._anchor = (0, 0)
         self._pos = None
         self._manual_width = None
+        self._manual_h = None
         self._grip = []
         self._resizing = False
         self._resize_start = None
+        self._resize_zone = ""
         self._moving = False
         self._move_start = None
         self.canvas = None
@@ -166,6 +170,8 @@ class TranslatePopup:
         self._anchor = anchor or caret_screen_pos() or cursor_pos()
         self._pos = None
         self._manual_width = None
+        self._manual_h = None
+        self._resize_zone = ""
         self._source = _truncate(source, 160)
         self.card_w = self._auto_width(source)
 
@@ -226,6 +232,8 @@ class TranslatePopup:
         c.bind("<ButtonPress-1>", self._on_press)
         c.bind("<B1-Motion>", self._on_drag)
         c.bind("<ButtonRelease-1>", self._on_release)
+        c.bind("<Motion>", self._on_motion)
+        c.bind("<Leave>", lambda e: c.config(cursor=""))
 
         self.set_result(pending, "", "")
         win.after(60, self._focus)
@@ -251,7 +259,9 @@ class TranslatePopup:
         self._btn_frame = None
         self._grip = []
         self._resizing = False
+        self._resize_zone = ""
         self._moving = False
+        self._manual_h = None
 
     # ── 尺寸 ──
     def _auto_width(self, text):
@@ -358,29 +368,36 @@ class TranslatePopup:
         n = self._estimate_lines(self._result, avail, wrap, theme.RESULT)
         line_h = result_font.metrics("linespace") + theme.POPUP_LINE_SPACING
 
-        # 按工作区高度限制最大行数，超出时在卡片内滚动
-        _, wt, _, wb = work_area_at(*self._anchor)
-        max_total_h = int((wb - wt) * 0.6)
-        chrome = HEADER_H + 12 + src_h + 8 + 10 + 6 + btn_h + 10
-        max_lines = max(4, (max_total_h - chrome) // max(line_h, 1))
-
-        # 行距会额外撑高内容，按像素换算成行数，避免最后一行被裁切
-        linespace = result_font.metrics("linespace")
-        content_px = n * linespace + (n - 1) * theme.POPUP_LINE_SPACING
-        height_lines = (content_px + linespace - 1) // max(1, linespace)
-        height_lines = min(max(height_lines, 1), max_lines)
-
-        # 让 Text 的请求宽度与卡片一致
-        self.text.config(width=max(10, avail // max(1, result_font.measure("0"))))
-        self.text.config(height=height_lines)
-        c.update_idletasks()
-
-        text_h = self.text.winfo_reqheight()
         y_src = HEADER_H + 12
         y_sep = y_src + src_h + 8
         y_text = y_sep + 10
-        y_btn = y_text + text_h + 6
-        total_h = y_btn + btn_h + 10
+        linespace = result_font.metrics("linespace")
+        chrome = y_text + 6 + btn_h + 10
+
+        self.text.config(width=max(10, avail // max(1, result_font.measure("0"))))
+
+        if self._manual_h is not None:
+            # 用户手动调整过高度：文字区填满剩余空间，内容超出时滚动
+            total_h = max(self._manual_h, chrome + linespace, self.MIN_H)
+            y_btn = total_h - 10 - btn_h
+            avail_text = max(linespace, y_btn - y_text - 6)
+            height_lines = max(1, avail_text // max(1, linespace))
+        else:
+            # 按工作区高度限制最大行数，超出时在卡片内滚动
+            _, wt, _, wb = work_area_at(*self._anchor)
+            max_total_h = int((wb - wt) * 0.6)
+            max_lines = max(4, (max_total_h - chrome) // max(line_h, 1))
+            content_px = n * linespace + (n - 1) * theme.POPUP_LINE_SPACING
+            height_lines = (content_px + linespace - 1) // max(1, linespace)
+            height_lines = min(max(height_lines, 1), max_lines)
+
+        self.text.config(height=height_lines)
+        c.update_idletasks()
+        text_h = self.text.winfo_reqheight()
+
+        if self._manual_h is None:
+            y_btn = y_text + text_h + 6
+            total_h = y_btn + btn_h + 10
         self._total_h = total_h
 
         c.coords(self._dir_item, P, HEADER_H // 2)
@@ -414,8 +431,8 @@ class TranslatePopup:
             return
         try:
             self.win.update_idletasks()
-            W = self.win.winfo_reqwidth()
-            H = self.win.winfo_reqheight()
+            W = self.card_w + SHADOW
+            H = self._total_h + SHADOW
             ax, ay = self._anchor
             wl, wt, wr, wb = work_area_at(ax, ay)
 
@@ -441,13 +458,63 @@ class TranslatePopup:
             pass
 
     # ── 拖动 / 缩放 ──
-    def _in_grip(self, x, y):
-        return x >= self.card_w - 24 and y >= self._total_h - 24
+    def _hit_zone(self, x, y):
+        """返回拖拽区域：n/s/e/w 及四角；None 表示非边缘。"""
+        W, H, E = self.card_w, self._total_h, self.EDGE
+        left, right = x <= E, x >= W - E
+        top, bottom = y <= E, y >= H - E
+        if left and top:
+            return "nw"
+        if right and top:
+            return "ne"
+        if left and bottom:
+            return "sw"
+        if right and bottom:
+            return "se"
+        if left:
+            return "w"
+        if right:
+            return "e"
+        if top:
+            return "n"
+        if bottom:
+            return "s"
+        return None
+
+    def _cursor_for(self, zone):
+        if zone in ("e", "w"):
+            return "sb_h_double_arrow"
+        if zone in ("n", "s"):
+            return "sb_v_double_arrow"
+        if zone in ("nw", "se"):
+            return "size_nw_se"
+        if zone in ("ne", "sw"):
+            return "size_ne_sw"
+        return ""
+
+    def _on_motion(self, e):
+        if self._resizing or self._moving or self.canvas is None:
+            return
+        try:
+            self.canvas.config(cursor=self._cursor_for(self._hit_zone(e.x, e.y)))
+        except tk.TclError:
+            self.canvas.config(cursor="")
+
+    def _apply_geometry(self, x, y, w, h):
+        """应用手动设定的位置与尺寸（w/h 为卡片尺寸）。"""
+        self._pos = (x, y)
+        self.card_w = w
+        self._manual_width = w
+        self._manual_h = h
+        self._relayout()
 
     def _on_press(self, e):
-        if self._in_grip(e.x, e.y):
+        zone = self._hit_zone(e.x, e.y)
+        if zone:
             self._resizing = True
-            self._resize_start = (e.x_root, e.y_root, self.card_w)
+            self._resize_zone = zone
+            x, y = self._pos or (0, 0)
+            self._resize_start = (e.x_root, e.y_root, x, y, self.card_w, self._total_h)
         elif e.y <= HEADER_H + 2:
             self._moving = True
             x, y = self._pos or (0, 0)
@@ -455,17 +522,52 @@ class TranslatePopup:
 
     def _on_drag(self, e):
         if self._resizing:
-            sx, _, sw = self._resize_start
-            new_w = max(self.MIN_W, min(self.MAX_W, sw + (e.x_root - sx)))
-            if new_w != self.card_w:
-                self.card_w = new_w
-                self._manual_width = new_w
-                self._relayout()
+            sx, sy, ox, oy, ow, oh = self._resize_start
+            dx, dy = e.x_root - sx, e.y_root - sy
+            zone = self._resize_zone
+            x, y, w, h = ox, oy, ow, oh
+
+            if "e" in zone:
+                w = ow + dx
+            if "w" in zone:
+                w = ow - dx
+                x = ox + dx
+            if "s" in zone:
+                h = oh + dy
+            if "n" in zone:
+                h = oh - dy
+                y = oy + dy
+
+            if w < self.MIN_W:
+                if "w" in zone:
+                    x -= self.MIN_W - w
+                w = self.MIN_W
+            if h < self.MIN_H:
+                if "n" in zone:
+                    y -= self.MIN_H - h
+                h = self.MIN_H
+
+            ax, ay = self._anchor
+            wl, wt, wr, wb = work_area_at(ax, ay)
+            if x < wl + MARGIN:
+                w -= wl + MARGIN - x
+                x = wl + MARGIN
+            if y < wt + MARGIN:
+                h -= wt + MARGIN - y
+                y = wt + MARGIN
+            if x + w > wr - MARGIN:
+                w = wr - MARGIN - x
+            if y + h > wb - MARGIN:
+                h = wb - MARGIN - y
+            w = max(self.MIN_W, min(self.MAX_W, w))
+            h = max(self.MIN_H, h)
+
+            self._apply_geometry(x, y, w, h)
         elif self._moving:
             sx, sy, ox, oy = self._move_start
             ax, ay = self._anchor
             wl, wt, wr, wb = work_area_at(ax, ay)
-            W, H = self.win.winfo_reqwidth(), self.win.winfo_reqheight()
+            W, H = self.card_w + SHADOW, self._total_h + SHADOW
             nx = max(wl + MARGIN, min(ox + (e.x_root - sx), wr - W - MARGIN))
             ny = max(wt + MARGIN, min(oy + (e.y_root - sy), wb - H - MARGIN))
             self._pos = (nx, ny)
@@ -474,6 +576,7 @@ class TranslatePopup:
     def _on_release(self, e):
         self._resizing = False
         self._resize_start = None
+        self._resize_zone = ""
         self._moving = False
         self._move_start = None
 
