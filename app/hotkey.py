@@ -135,6 +135,6 @@ class SelectionWatcher:
             if _window_pid_at(x, y) == self._own_pid:
                 return  # 本程序窗口内，不触发
             try:
-                self.on_select()
+                self.on_select(x, y)
             except Exception:
                 pass

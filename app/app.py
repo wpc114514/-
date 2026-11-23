@@ -6,7 +6,7 @@ import tkinter as tk
 from . import config as config_mod
 from .control import ControlWindow
 from .hotkey import HotkeyWatcher, SelectionWatcher, send_copy
-from .popup import TranslatePopup, Toast
+from .popup import TranslatePopup, Toast, cursor_pos
 from .translators import TranslatorChain, TranslateError, resolve_langs
 
 
@@ -22,6 +22,7 @@ class App:
 
         self.last_clip = None      # 上次见到的剪贴板内容（防自己复制触发）
         self.force_until = 0.0     # F8 触发的强制翻译窗口
+        self._pending_anchor = None  # 本次翻译的弹窗锚点（选区/鼠标位置）
         self._version = 0          # 丢弃过期翻译结果
 
         self.watcher = HotkeyWatcher({
@@ -62,15 +63,21 @@ class App:
             if text and (changed or forced) and (forced or self.cfg.get("auto_translate", True)):
                 self.last_clip = text
                 self.force_until = 0.0
+                anchor = self._pending_anchor
+                self._pending_anchor = None
                 limit = int(self.cfg.get("max_text_length", 1500))
                 if len(text) > limit:
                     text = text[:limit] + "…（已截断）"
-                self.translate(text, source="clipboard")
+                self.translate(text, source="clipboard", anchor=anchor)
+            elif not forced:
+                self._pending_anchor = None
         self.root.after(250, self._poll_clipboard)
 
     # ── 热键 ──────────────────────────────────────────────────
     def on_hotkey_translate(self):
         """F8：自动复制当前选中文字并翻译（无需手动 Ctrl+C）。"""
+        if self._pending_anchor is None:
+            self._pending_anchor = cursor_pos()
         self.force_until = time.time() + 1.5
         send_copy()
 
@@ -78,17 +85,18 @@ class App:
         """F9：开/关自动翻译。"""
         self.control.toggle_auto()
 
-    def on_select_translate(self):
-        """划词即译：拖选文字后延迟一点再复制并翻译。"""
+    def on_select_translate(self, x, y):
+        """划词即译：以鼠标松开位置为锚点，延迟一点再复制并翻译。"""
+        self._pending_anchor = (x, y)
         self.root.after(120, self.on_hotkey_translate)
 
     # ── 翻译流程 ──────────────────────────────────────────────
-    def translate(self, text, source="clipboard", direction=None):
+    def translate(self, text, source="clipboard", direction=None, anchor=None):
         direction = direction or self.cfg.get("direction", "auto")
         self._version += 1
         v = self._version
         if source == "clipboard":
-            self.popup.show(text)
+            self.popup.show(text, anchor=anchor)
         self.control.set_status("正在翻译…")
 
         def worker():

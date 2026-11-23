@@ -26,6 +26,10 @@ SMALL = 10
 TINY = 9
 RESULT = 12
 
+# 弹窗排版
+POPUP_LINE_SPACING = 5   # 行距（像素）
+POPUP_PARA_SPACING = 4   # 段落后间距（像素）
+
 
 def apply_style(root):
     """配置 ttk 现代浅色主题。"""
